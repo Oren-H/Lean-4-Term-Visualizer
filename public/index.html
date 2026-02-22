@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lean 4 Term Visualizer</title>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/theme/material-darker.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Lean 4 Term Visualizer</h1>
+    </div>
+    <div class="header-right">
+      <span class="tactics-label">Tactics:</span>
+      <code>intro</code> <code>intros</code> <code>apply</code> <code>exact</code>
+      <code>assumption</code> <code>constructor</code> <code>cases</code>
+      <code>left</code> <code>right</code> <code>have</code> <code>obtain</code>
+    </div>
+  </header>
+
+  <main>
+    <div class="pane editor-pane">
+      <div class="pane-header">
+        <span class="pane-title">Tactic Mode</span>
+        <span class="unicode-hint">Type \ for shortcuts (e.g. \and &rarr; &and;)</span>
+      </div>
+      <div id="editor-container"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="pane term-pane">
+      <div class="pane-header">
+        <span class="pane-title">Term Mode</span>
+        <span id="status-indicator" class="status"></span>
+      </div>
+      <div id="term-display">
+        <div id="term-type" class="term-section"></div>
+        <div id="term-body" class="term-section">
+          <span class="placeholder">Write a theorem and tactics on the left to see the generated term.</span>
+        </div>
+        <div id="term-errors" class="term-section"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/edit/matchbrackets.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/edit/closebrackets.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
