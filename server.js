@@ -170,6 +170,60 @@ function parseVariableNames(userCode) {
   return names;
 }
 
+function parseTheoremHypotheses(userCode) {
+  const lines = userCode.split('\n');
+  let sigText = '';
+  let found = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!found) {
+      if (/\b(theorem|example)\b/.test(trimmed)) {
+        found = true;
+        sigText += trimmed;
+      }
+    } else {
+      sigText += ' ' + trimmed;
+    }
+    if (found && sigText.includes(':= by')) break;
+  }
+
+  if (!found) return [];
+
+  const byIdx = sigText.indexOf(':= by');
+  if (byIdx === -1) return [];
+
+  let afterKeyword = sigText;
+  const theoremMatch = afterKeyword.match(/\btheorem\s+\S+\s*/);
+  const exampleMatch = afterKeyword.match(/\bexample\s*/);
+  if (theoremMatch) {
+    afterKeyword = afterKeyword.substring(theoremMatch.index + theoremMatch[0].length);
+  } else if (exampleMatch) {
+    afterKeyword = afterKeyword.substring(exampleMatch.index + exampleMatch[0].length);
+  } else {
+    return [];
+  }
+
+  const sigBody = afterKeyword.substring(0, afterKeyword.indexOf(':= by')).trim();
+
+  let lastColonAtDepth0 = -1;
+  let depth = 0;
+  for (let i = 0; i < sigBody.length; i++) {
+    const ch = sigBody[i];
+    if (ch === '(' || ch === '{' || ch === '[') depth++;
+    else if (ch === ')' || ch === '}' || ch === ']') depth--;
+    else if (ch === ':' && depth === 0) lastColonAtDepth0 = i;
+  }
+
+  if (lastColonAtDepth0 === -1) return [];
+
+  const paramsSection = sigBody.substring(0, lastColonAtDepth0).trim();
+  if (!paramsSection) return [];
+
+  const params = parseFunParams(paramsSection);
+  return params.map(p => p.name);
+}
+
 function parseFunParams(paramsStr) {
   const params = [];
   let i = 0;
@@ -289,6 +343,28 @@ function stripForallPrefix(fullType, varNames) {
   }
 
   return type;
+}
+
+function stripLeadingArrows(type, count) {
+  if (!type || count <= 0) return type;
+  let result = type.trim();
+  const arrow = '→';
+  for (let i = 0; i < count; i++) {
+    let depth = 0;
+    let arrowIdx = -1;
+    for (let j = 0; j < result.length; j++) {
+      const ch = result[j];
+      if (ch === '(' || ch === '{' || ch === '[') depth++;
+      else if (ch === ')' || ch === '}' || ch === ']') depth--;
+      else if (depth === 0 && result.startsWith(arrow, j)) {
+        arrowIdx = j;
+        break;
+      }
+    }
+    if (arrowIdx === -1) break;
+    result = result.substring(arrowIdx + arrow.length).trim();
+  }
+  return result;
 }
 
 function rewriteCodeForGoalState(userCode, cursorLine) {
@@ -493,8 +569,12 @@ app.post('/api/elaborate', (req, res) => {
     const errors = parseErrors(stdout, stderr);
 
     const varNames = parseVariableNames(userCode);
-    const strippedTerm = rawTerm ? stripVariableParams(rawTerm, varNames) : rawTerm;
+    const hypNames = parseTheoremHypotheses(userCode);
+    const allStripNames = [...varNames, ...hypNames];
+
+    const strippedTerm = rawTerm ? stripVariableParams(rawTerm, allStripNames) : rawTerm;
     const strippedType = fullType ? stripForallPrefix(fullType, varNames) : fullType;
+    const displayType = strippedType ? stripLeadingArrows(strippedType, hypNames.length) : strippedType;
 
     const displayTerm = strippedTerm ? formatTermForDisplay(strippedTerm) : null;
     const complete = rawTerm ? !rawTerm.includes('sorry') : false;
@@ -502,7 +582,7 @@ app.post('/api/elaborate', (req, res) => {
     const result = {
       term: strippedTerm || null,
       displayTerm: displayTerm || null,
-      type: strippedType || null,
+      type: displayType || null,
       errors,
       complete,
     };
@@ -640,8 +720,12 @@ app.post('/api/check', (req, res) => {
     const errors = parseErrors(stdout, stderr, elaborateLineCount);
 
     const varNames = parseVariableNames(userCode);
-    const strippedTerm = rawTerm ? stripVariableParams(rawTerm, varNames) : rawTerm;
+    const hypNames = parseTheoremHypotheses(userCode);
+    const allStripNames = [...varNames, ...hypNames];
+
+    const strippedTerm = rawTerm ? stripVariableParams(rawTerm, allStripNames) : rawTerm;
     const strippedType = fullType ? stripForallPrefix(fullType, varNames) : fullType;
+    const displayType = strippedType ? stripLeadingArrows(strippedType, hypNames.length) : strippedType;
 
     const displayTerm = strippedTerm ? formatTermForDisplay(strippedTerm) : null;
     const complete = rawTerm ? !rawTerm.includes('sorry') : false;
@@ -649,7 +733,7 @@ app.post('/api/check', (req, res) => {
     const elaborateResult = {
       term: strippedTerm || null,
       displayTerm: displayTerm || null,
-      type: strippedType || null,
+      type: displayType || null,
       errors,
       complete,
     };
