@@ -305,9 +305,9 @@ const TACTIC_INFO = {
     example: 'example (A B : Prop) (ha : A) (hb : B) : A ∧ B := by\n  constructor\n  · exact ha\n  · exact hb',
   },
   cases: {
-    tactic: 'Performs case analysis on a hypothesis. For <code>h : A ∨ B</code>, creates two subgoals — one assuming <code>A</code>, one assuming <code>B</code>. Works on any inductive type.',
-    term: 'Translates to a <code>.casesOn</code> eliminator or pattern match. For <code>h : A ∨ B</code>, becomes <code>Or.casesOn h (fun h1 =&gt; ...) (fun h2 =&gt; ...)</code>.',
-    example: 'example (A B : Prop) (h : A ∨ B) : B ∨ A := by\n  cases h with\n  | inl ha => right; exact ha\n  | inr hb => left; exact hb',
+    tactic: 'Performs case analysis on a hypothesis of an inductive type, creating one subgoal per constructor. For <code>h : A ∨ B</code>, it creates two subgoals — one where you have <code>ha : A</code> (the <code>inl</code> case) and one where you have <code>hb : B</code> (the <code>inr</code> case). For <code>h : A ∧ B</code>, it creates one subgoal where both components are available.',
+    term: 'Translates to a <code>.casesOn</code> eliminator. For every inductive type, Lean auto-generates a <code>T.casesOn</code> function that encodes its <b>elimination principle</b>: given a value of type <code>T</code>, you handle each constructor to produce the desired result.<br><br>It takes the value being analyzed, then <b>one handler function per constructor</b>. Each handler receives that constructor\'s arguments and must produce a term of the goal type.<br><br><b>Examples:</b><br>• <code>Or.casesOn h (fun ha =&gt; ...) (fun hb =&gt; ...)</code> — <code>Or</code> has two constructors (<code>inl</code> and <code>inr</code>), so <code>casesOn</code> takes two branches: the first receives the <code>A</code> proof, the second the <code>B</code> proof.<br>• <code>And.casesOn h (fun ha hb =&gt; ...)</code> — <code>And</code> has one constructor (<code>intro</code>) with two fields, so <code>casesOn</code> takes one branch receiving both proofs.',
+    example: 'example (A B : Prop) (h : A ∨ B) : B ∨ A := by\n  cases h with\n  | inl ha => right; exact ha\n  | inr hb => left; exact hb\n\n-- The generated term is:\n-- Or.casesOn h (fun ha => Or.inr ha) (fun hb => Or.inl hb)',
   },
   left: {
     tactic: 'When the goal is <code>A ∨ B</code>, selects the left disjunct and changes the goal to <code>A</code>.',
