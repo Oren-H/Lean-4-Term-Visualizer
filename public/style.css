@@ -30,11 +30,11 @@ html, body {
 header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 16px;
   padding: 10px 20px;
   background: var(--header-bg);
   border-bottom: 1px solid var(--border-color);
-  height: 48px;
+  min-height: 48px;
   flex-shrink: 0;
 }
 
@@ -43,6 +43,8 @@ header h1 {
   font-weight: 600;
   color: var(--accent-blue);
   letter-spacing: 0.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .header-right {
