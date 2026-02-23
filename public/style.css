@@ -183,6 +183,20 @@ header h1 {
   border: 1px solid var(--border-color);
 }
 
+.modal-example {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  padding: 12px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+}
+
 main {
   display: flex;
   height: calc(100vh - 48px);

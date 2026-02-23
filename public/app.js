@@ -277,46 +277,57 @@ const TACTIC_INFO = {
   intro: {
     tactic: 'Introduces one hypothesis or variable from the goal into the local context. If the goal is <code>A → B</code>, then <code>intro h</code> moves <code>A</code> into the context as <code>h</code> and changes the goal to <code>B</code>.',
     term: 'Corresponds to a lambda abstraction <code>fun h =&gt; ...</code>. The introduced hypothesis becomes a bound variable in the proof term.',
+    example: 'example (A B : Prop) : A → B → A := by\n  intro ha\n  intro hb\n  exact ha',
   },
   intros: {
     tactic: 'Introduces multiple hypotheses or variables at once. <code>intros h1 h2</code> is equivalent to calling <code>intro</code> repeatedly. Without names, Lean auto-generates them.',
     term: 'Corresponds to nested lambda abstractions <code>fun h1 h2 =&gt; ...</code>. Each introduced name adds another layer of binding.',
+    example: 'example (A B : Prop) : A → B → A := by\n  intros ha hb\n  exact ha',
   },
   apply: {
     tactic: 'Given a lemma or hypothesis <code>f : A → B</code> and a goal <code>B</code>, <code>apply f</code> reduces the goal to <code>A</code>. Works with any number of arguments.',
     term: 'Corresponds to function application. The proof term becomes <code>f ?_</code> where each <code>?_</code> placeholder is a remaining subgoal to fill in.',
+    example: 'example (A B : Prop) (ha : A) (f : A → B) : B := by\n  apply f\n  exact ha',
   },
   exact: {
     tactic: 'Closes the current goal by providing a term whose type exactly matches the goal. <code>exact h</code> finishes the goal if <code>h</code> has the right type.',
     term: 'Directly supplies the proof term. <code>exact h</code> simply inserts <code>h</code> as-is into the proof term at that position.',
+    example: 'example (A : Prop) (ha : A) : A := by\n  exact ha',
   },
   assumption: {
     tactic: 'Searches the local context for a hypothesis whose type exactly matches the current goal and uses it automatically.',
     term: 'Resolves to whichever local variable (bound by <code>fun</code> or <code>have</code>) has a type matching the goal. Equivalent to <code>exact</code> with the matching hypothesis.',
+    example: 'example (A : Prop) (ha : A) : A := by\n  assumption',
   },
   constructor: {
     tactic: 'When the goal is an inductive type, applies its default constructor. For <code>A ∧ B</code> it splits into two subgoals: prove <code>A</code> and prove <code>B</code>.',
     term: 'Applies the type\'s constructor directly. For conjunctions this becomes <code>And.intro _ _</code>; for existentials, <code>Exists.intro _ _</code>.',
+    example: 'example (A B : Prop) (ha : A) (hb : B) : A ∧ B := by\n  constructor\n  · exact ha\n  · exact hb',
   },
   cases: {
     tactic: 'Performs case analysis on a hypothesis. For <code>h : A ∨ B</code>, creates two subgoals — one assuming <code>A</code>, one assuming <code>B</code>. Works on any inductive type.',
     term: 'Translates to a <code>.casesOn</code> eliminator or pattern match. For <code>h : A ∨ B</code>, becomes <code>Or.casesOn h (fun h1 =&gt; ...) (fun h2 =&gt; ...)</code>.',
+    example: 'example (A B : Prop) (h : A ∨ B) : B ∨ A := by\n  cases h with\n  | inl ha => right; exact ha\n  | inr hb => left; exact hb',
   },
   left: {
     tactic: 'When the goal is <code>A ∨ B</code>, selects the left disjunct and changes the goal to <code>A</code>.',
     term: 'Corresponds to <code>Or.inl</code>, the left injection into a sum type. The proof term becomes <code>Or.inl _</code>.',
+    example: 'example (A B : Prop) (ha : A) : A ∨ B := by\n  left\n  exact ha',
   },
   right: {
     tactic: 'When the goal is <code>A ∨ B</code>, selects the right disjunct and changes the goal to <code>B</code>.',
     term: 'Corresponds to <code>Or.inr</code>, the right injection into a sum type. The proof term becomes <code>Or.inr _</code>.',
+    example: 'example (A B : Prop) (hb : B) : A ∨ B := by\n  right\n  exact hb',
   },
   have: {
     tactic: 'Introduces an intermediate lemma. <code>have h : P := proof</code> adds <code>h : P</code> to the context, then you continue proving the original goal with <code>h</code> available.',
     term: 'Corresponds to a <code>have</code> or <code>let</code> binding in the proof term: <code>have h : P := proof; body</code>. The intermediate result is bound and used in the rest of the term.',
+    example: 'example (A B : Prop) (ha : A) (f : A → B) : B := by\n  have hb : B := f ha\n  exact hb',
   },
   obtain: {
     tactic: 'Destructures an existential or structure hypothesis. <code>obtain ⟨x, hx⟩ := h</code> extracts the witness and proof from <code>h : ∃ x, P x</code>, adding both to the context.',
     term: 'Corresponds to pattern matching on the existential: the term uses the eliminator or <code>let ⟨x, hx⟩ := h; ...</code> to bind the components.',
+    example: 'example (h : ∃ n : Nat, n = 0) : ∃ n : Nat, n = 0 := by\n  obtain ⟨n, hn⟩ := h\n  exact ⟨n, hn⟩',
   },
 };
 
@@ -325,6 +336,7 @@ const TACTIC_INFO = {
   const titleEl = document.getElementById('modal-title');
   const tacticDescEl = document.getElementById('modal-tactic-desc');
   const termDescEl = document.getElementById('modal-term-desc');
+  const exampleEl = document.getElementById('modal-example');
   const closeBtn = document.getElementById('modal-close-btn');
 
   function openModal(tactic) {
@@ -333,6 +345,7 @@ const TACTIC_INFO = {
     titleEl.textContent = tactic;
     tacticDescEl.innerHTML = info.tactic;
     termDescEl.innerHTML = info.term;
+    exampleEl.textContent = info.example;
     overlay.classList.remove('hidden');
   }
 
