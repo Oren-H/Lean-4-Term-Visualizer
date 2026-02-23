@@ -4,6 +4,8 @@ A web app that visualizes how Lean 4 tactics build proof terms in real time.
 
 Write tactic proofs on the left; see the generated term on the right, with `?` marking subgoals that still need to be filled in.
 
+![Tactic2Term screenshot](screenshot.png)
+
 ## Prerequisites
 
 - **Lean 4** installed via [elan](https://github.com/leanprover/elan) (available as `lean` in PATH)
