@@ -51,7 +51,7 @@ function rewriteCodeForExtraction(userCode) {
 
   const indent = ' '.repeat(indentLevel);
   code = code.trimEnd() + `\n${indent}try all_goals sorry\n`;
-  code += `\n#print ${printName}\n`;
+  code += `\nset_option pp.funBinderTypes true in\n#print ${printName}\n`;
 
   return { code, printName, error: null };
 }
@@ -128,6 +128,150 @@ function formatTermForDisplay(rawTerm) {
   return term;
 }
 
+function parseVariableNames(userCode) {
+  const names = [];
+  const lines = userCode.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('variable')) continue;
+    const rest = trimmed.substring('variable'.length);
+    const groupRe = /[({[\[]([^)}\]]*)[)}\]]/g;
+    let match;
+    while ((match = groupRe.exec(rest)) !== null) {
+      const inside = match[1].trim();
+      const colonIdx = inside.indexOf(':');
+      if (colonIdx !== -1) {
+        const namesPart = inside.substring(0, colonIdx).trim();
+        for (const n of namesPart.split(/\s+/)) {
+          if (n) names.push(n);
+        }
+      }
+    }
+  }
+  return names;
+}
+
+function parseFunParams(paramsStr) {
+  const params = [];
+  let i = 0;
+  const s = paramsStr.trim();
+
+  while (i < s.length) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (i >= s.length) break;
+
+    if (s[i] === '(' || s[i] === '{' || s[i] === '[') {
+      const open = s[i];
+      const close = open === '(' ? ')' : open === '{' ? '}' : ']';
+      const start = i;
+      let depth = 1;
+      i++;
+      while (i < s.length && depth > 0) {
+        if (s[i] === open) depth++;
+        else if (s[i] === close) depth--;
+        i++;
+      }
+      const raw = s.substring(start, i);
+      const inner = s.substring(start + 1, i - 1).trim();
+      const colonIdx = inner.indexOf(':');
+      if (colonIdx !== -1) {
+        const namesPart = inner.substring(0, colonIdx).trim();
+        const typePart = inner.substring(colonIdx + 1).trim();
+        const individualNames = namesPart.split(/\s+/).filter(n => n);
+        for (const name of individualNames) {
+          params.push({ name, type: typePart, raw: `(${name} : ${typePart})` });
+        }
+      } else {
+        params.push({ name: inner, type: null, raw });
+      }
+    } else {
+      const start = i;
+      while (i < s.length && !/\s/.test(s[i])) i++;
+      const name = s.substring(start, i);
+      params.push({ name, type: null, raw: name });
+    }
+  }
+
+  return params;
+}
+
+function stripVariableParams(rawTerm, varNames) {
+  if (!rawTerm || varNames.length === 0) return rawTerm;
+
+  const varSet = new Set(varNames);
+  const funMatch = rawTerm.match(/^fun\s+([\s\S]*?)\s*=>([\s\S]*)$/);
+  if (!funMatch) return rawTerm;
+
+  const params = parseFunParams(funMatch[1]);
+  const body = funMatch[2];
+
+  let stripCount = 0;
+  for (const param of params) {
+    if (varSet.has(param.name)) {
+      stripCount++;
+    } else {
+      break;
+    }
+  }
+
+  if (stripCount === 0) return rawTerm;
+
+  const remaining = params.slice(stripCount);
+  if (remaining.length > 0) {
+    const paramStr = remaining.map(p => p.raw).join(' ');
+    return 'fun ' + paramStr + ' =>' + body;
+  }
+  return body.trim();
+}
+
+function stripForallPrefix(fullType, varNames) {
+  if (!fullType || varNames.length === 0) return fullType;
+
+  let type = fullType.trim();
+  const varSet = new Set(varNames);
+
+  while (type.startsWith('∀') || type.startsWith('forall')) {
+    const prefix = type.startsWith('∀') ? '∀' : 'forall';
+    const afterPrefix = type.substring(prefix.length).trimStart();
+
+    let depth = 0;
+    let commaIdx = -1;
+    for (let i = 0; i < afterPrefix.length; i++) {
+      const ch = afterPrefix[i];
+      if (ch === '(' || ch === '{' || ch === '[') depth++;
+      else if (ch === ')' || ch === '}' || ch === ']') depth--;
+      else if (ch === ',' && depth === 0) {
+        commaIdx = i;
+        break;
+      }
+    }
+
+    if (commaIdx === -1) break;
+
+    const binderSection = afterPrefix.substring(0, commaIdx);
+    const binderGroupRe = /[({[\[]([^)}\]]*)[)}\]]/g;
+    let match;
+    const binderNames = [];
+    while ((match = binderGroupRe.exec(binderSection)) !== null) {
+      const inside = match[1].trim();
+      const colonIdx = inside.indexOf(':');
+      if (colonIdx !== -1) {
+        const namesPart = inside.substring(0, colonIdx).trim();
+        for (const n of namesPart.split(/\s+/)) {
+          if (n) binderNames.push(n);
+        }
+      }
+    }
+
+    if (binderNames.length === 0) break;
+    if (!binderNames.every(n => varSet.has(n))) break;
+
+    type = afterPrefix.substring(commaIdx + 1).trim();
+  }
+
+  return type;
+}
+
 app.post('/api/elaborate', (req, res) => {
   const { code: userCode } = req.body;
 
@@ -160,13 +304,18 @@ app.post('/api/elaborate', (req, res) => {
 
     const { rawTerm, fullType } = parsePrintOutput(parseSource, printName);
     const errors = parseErrors(stdout, stderr);
-    const displayTerm = rawTerm ? formatTermForDisplay(rawTerm) : null;
+
+    const varNames = parseVariableNames(userCode);
+    const strippedTerm = rawTerm ? stripVariableParams(rawTerm, varNames) : rawTerm;
+    const strippedType = fullType ? stripForallPrefix(fullType, varNames) : fullType;
+
+    const displayTerm = strippedTerm ? formatTermForDisplay(strippedTerm) : null;
     const complete = rawTerm ? !rawTerm.includes('sorry') : false;
 
     res.json({
-      term: rawTerm || null,
+      term: strippedTerm || null,
       displayTerm: displayTerm || null,
-      type: fullType || null,
+      type: strippedType || null,
       errors,
       complete,
     });
