@@ -1,4 +1,4 @@
-# Lean 4 Term Visualizer
+# Tactic2Term
 
 A web app that visualizes how Lean 4 tactics build proof terms in real time.
 

@@ -553,3 +553,67 @@ editor.on('cursorActivity', function () {
 });
 
 fetchGoals();
+
+// --- Resizable dividers ---
+(function initDividers() {
+  var vDivider = document.querySelector('.divider');
+  var hDivider = document.querySelector('.h-divider');
+  var editorPane = document.querySelector('.editor-pane');
+  var rightPane = document.querySelector('.right-pane');
+  var termSubPane = document.querySelector('.term-sub-pane');
+  var infoviewSubPane = document.querySelector('.infoview-sub-pane');
+  var mainEl = document.querySelector('main');
+
+  function startDrag(onMove, onUp) {
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', function handler() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', handler);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (onUp) onUp();
+    });
+    document.body.style.userSelect = 'none';
+  }
+
+  if (vDivider && editorPane && rightPane) {
+    vDivider.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      document.body.style.cursor = 'col-resize';
+      startDrag(function (e2) {
+        var rect = mainEl.getBoundingClientRect();
+        var offset = e2.clientX - rect.left;
+        var total = rect.width;
+        var minPx = 100;
+        if (offset < minPx) offset = minPx;
+        if (offset > total - minPx) offset = total - minPx;
+        editorPane.style.flex = 'none';
+        rightPane.style.flex = 'none';
+        editorPane.style.width = offset + 'px';
+        rightPane.style.width = (total - offset - vDivider.offsetWidth) + 'px';
+        editor.refresh();
+      });
+    });
+  }
+
+  if (hDivider && termSubPane && infoviewSubPane) {
+    hDivider.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      document.body.style.cursor = 'row-resize';
+      startDrag(function (e2) {
+        var rect = rightPane.getBoundingClientRect();
+        var headerHeight = termSubPane.querySelector('.pane-header').offsetHeight +
+                           infoviewSubPane.querySelector('.pane-header').offsetHeight;
+        var offset = e2.clientY - rect.top;
+        var total = rect.height;
+        var minPx = 60;
+        if (offset < minPx) offset = minPx;
+        if (offset > total - minPx) offset = total - minPx;
+        termSubPane.style.flex = 'none';
+        infoviewSubPane.style.flex = 'none';
+        termSubPane.style.height = offset + 'px';
+        infoviewSubPane.style.height = (total - offset - hDivider.offsetHeight) + 'px';
+      });
+    });
+  }
+})();
