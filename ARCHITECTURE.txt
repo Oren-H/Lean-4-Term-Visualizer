@@ -1,0 +1,151 @@
+Lean Term Visualizer (Tactic2Term) — Architecture Overview
+==========================================================
+
+PURPOSE
+-------
+Tactic2Term visualizes how Lean 4 tactics build proof terms in real time.
+Users write tactic proofs in the editor and see the generated term on the
+right, with "?" marking incomplete subgoals. A companion InfoView pane
+shows the current goal state at the cursor position.
+
+
+PROJECT STRUCTURE
+-----------------
+Lean Term Visualizer/
+├── server.js          Backend Express server (Node.js)
+├── package.json       Dependencies and start script
+├── package-lock.json  Dependency lock file
+├── README.md          User-facing documentation
+└── public/            Frontend static files served by Express
+    ├── index.html     HTML layout (three-pane UI)
+    ├── app.js         Client-side logic (editor, API calls, rendering)
+    └── style.css      Dark theme styling (Catppuccin-inspired)
+
+
+TECHNOLOGIES
+------------
+Backend:   Node.js, Express 5, child_process (spawns Lean), fs, crypto
+Frontend:  Vanilla JavaScript, CodeMirror 5 (code editor), HTML5/CSS3
+External:  Lean 4 compiler (must be installed via elan)
+
+
+BACKEND — server.js
+--------------------
+The server exposes three POST endpoints:
+
+  /api/elaborate  — Returns the proof term for a complete tactic block.
+  /api/goals      — Returns the goal state at a given cursor line.
+  /api/check      — Combined endpoint (term + goals in one request).
+
+Each endpoint follows the same pipeline:
+
+  1. Receive user code (and optionally a cursor line).
+  2. Check the LRU cache (SHA-256 hash of the input as key).
+  3. If not cached, rewrite the code for Lean consumption:
+     - For term extraction: append "try all_goals sorry" and a "#print"
+       command so Lean outputs the proof term.
+     - For goal state: truncate the code at the cursor line so Lean
+       reports unsolved goals at that point.
+  4. Write the rewritten code to a temporary file in the OS temp directory.
+  5. Execute the Lean compiler on that file (15-second timeout).
+  6. Parse stdout/stderr:
+     - parsePrintOutput()  — extracts the raw term from #print output.
+     - parseGoalState()    — extracts hypotheses and targets from errors.
+     - parseErrors()       — collects error messages.
+  7. Post-process the term:
+     - stripVariableParams()  — removes variable bindings from the term.
+     - stripForallPrefix()    — strips leading ∀ quantifiers that match
+                                user-declared variables.
+     - formatTermForDisplay() — replaces "sorry" placeholders with "?".
+  8. Cache the result (LRU, max 20 entries per cache).
+  9. Return JSON to the client.
+
+Process management:
+  - Only one Lean process runs per endpoint at a time. A new request
+    kills the previous in-flight process to avoid resource leaks.
+  - Temp files are cleaned up even if the process is killed or errors out.
+  - ELAN_OFFLINE=1 is set to prevent network access during execution.
+
+
+FRONTEND — public/app.js
+--------------------------
+The frontend is a single-page application with three resizable panes:
+
+  Editor (left)     — CodeMirror instance with a custom Lean 4 mode.
+  Term Display (mid) — Shows the elaborated proof term.
+  InfoView (right)   — Shows the goal state at the cursor position.
+
+Event flow:
+
+  1. editor.on('change')
+     → Debounced (400ms) call to /api/check with the full code and
+       the current cursor line.
+     → Response updates the term display, type annotation, error list,
+       and goal state.
+
+  2. editor.on('cursorActivity')
+     → Debounced (500ms) call to /api/goals with code and cursor line.
+     → Response updates the InfoView pane independently.
+
+  Both paths use AbortController to cancel stale in-flight requests,
+  and a requestId counter to discard out-of-order responses.
+
+Additional features:
+  - 50+ Unicode shortcuts (e.g. \and → ∧, \to → →).
+  - Tactic modal: educational popup explaining each tactic and its
+    corresponding term-level equivalent.
+  - Drag-to-resize dividers between panes.
+  - Status indicator showing loading / complete / incomplete / error.
+
+
+CACHING ARCHITECTURE
+--------------------
+Three independent LRU caches on the server:
+
+  elaborateCache  — keyed by SHA-256(code)
+  goalsCache      — keyed by SHA-256(code + cursorLine)
+  checkCache      — keyed by SHA-256(code + cursorLine)
+
+Each cache holds up to 20 entries. On overflow, the oldest entry is
+evicted. The /api/check endpoint can also compose results from the
+elaborate and goals caches individually if only one half is cached.
+
+
+DATA FLOW SUMMARY
+-----------------
+
+  User types Lean 4 tactics
+       │
+       ▼
+  CodeMirror editor fires 'change' event
+       │
+       ▼
+  Debounced POST to /api/check  {code, cursorLine}
+       │
+       ▼
+  Server: cache lookup (hit → return immediately)
+       │  miss ↓
+       ▼
+  Rewrite code → temp file → execute `lean` → parse output
+       │
+       ▼
+  Strip variables, format term, cache result
+       │
+       ▼
+  JSON response: {term, displayTerm, type, errors, complete, goals}
+       │
+       ▼
+  Frontend renders term, type, errors, goals, updates status
+
+
+DESIGN DECISIONS
+----------------
+1. Minimal dependencies — only Express; no build tools or bundlers.
+2. Lean is invoked as a subprocess, not via LSP, keeping the server
+   simple and stateless (apart from the cache).
+3. Code rewriting injects Lean metaprogramming commands rather than
+   requiring users to modify their proofs.
+4. Separate debounce timers for content changes vs. cursor movement
+   keep both displays responsive without excessive Lean invocations.
+5. Frontend uses vanilla JS and CodeMirror from a CDN, avoiding any
+   build step and keeping deployment to a single `npm start`.
