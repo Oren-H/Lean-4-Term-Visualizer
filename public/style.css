@@ -286,6 +286,11 @@ main {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
+  transition: opacity 0.15s ease;
+}
+
+#term-body.stale {
+  opacity: 0.45;
 }
 
 #term-body .placeholder {
