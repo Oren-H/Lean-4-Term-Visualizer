@@ -380,6 +380,7 @@ const termErrorsEl = document.getElementById('term-errors');
 
 let debounceTimer = null;
 let requestId = 0;
+let elaborateController = null;
 
 function setStatus(type, text) {
   statusEl.className = 'status ' + type;
@@ -414,22 +415,28 @@ function highlightTerm(displayTerm) {
   return html;
 }
 
-async function elaborate() {
+async function check() {
   const code = editor.getValue();
+  const cursorLine = editor.getCursor().line;
   const currentRequest = ++requestId;
+
+  if (elaborateController) elaborateController.abort();
+  elaborateController = new AbortController();
 
   setStatus('loading', 'Elaborating...');
 
   try {
-    const resp = await fetch('/api/elaborate', {
+    const resp = await fetch('/api/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, cursorLine }),
+      signal: elaborateController.signal,
     });
 
     if (currentRequest !== requestId) return;
 
     const data = await resp.json();
+    termBodyEl.classList.remove('stale');
 
     if (data.type) {
       termTypeEl.textContent = data.type;
@@ -464,27 +471,33 @@ async function elaborate() {
     } else {
       setStatus('', '');
     }
+
+    renderGoals(data.goals || []);
   } catch (err) {
+    if (err.name === 'AbortError') return;
     if (currentRequest !== requestId) return;
+    termBodyEl.classList.remove('stale');
     setStatus('error', 'Connection error');
     termBodyEl.innerHTML = '<span class="placeholder">Failed to connect to server.</span>';
   }
 }
 
 editor.on('change', function () {
+  setStatus('loading', 'Elaborating...');
+  termBodyEl.classList.add('stale');
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(elaborate, 1500);
+  debounceTimer = setTimeout(check, 400);
   clearTimeout(goalsDebounceTimer);
-  goalsDebounceTimer = setTimeout(fetchGoals, 1500);
 });
 
-elaborate();
+check();
 
 // --- InfoView / Goal state ---
 const infoviewEl = document.getElementById('infoview-display');
 
 let goalsDebounceTimer = null;
 let goalsRequestId = 0;
+let goalsController = null;
 
 function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -530,11 +543,15 @@ async function fetchGoals() {
   const cursorLine = editor.getCursor().line;
   const currentRequest = ++goalsRequestId;
 
+  if (goalsController) goalsController.abort();
+  goalsController = new AbortController();
+
   try {
     const resp = await fetch('/api/goals', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, cursorLine }),
+      signal: goalsController.signal,
     });
 
     if (currentRequest !== goalsRequestId) return;
@@ -542,6 +559,7 @@ async function fetchGoals() {
     const data = await resp.json();
     renderGoals(data.goals || []);
   } catch (err) {
+    if (err.name === 'AbortError') return;
     if (currentRequest !== goalsRequestId) return;
     infoviewEl.innerHTML = '<span class="placeholder">Failed to fetch goals.</span>';
   }
@@ -551,8 +569,6 @@ editor.on('cursorActivity', function () {
   clearTimeout(goalsDebounceTimer);
   goalsDebounceTimer = setTimeout(fetchGoals, 500);
 });
-
-fetchGoals();
 
 // --- Resizable dividers ---
 (function initDividers() {

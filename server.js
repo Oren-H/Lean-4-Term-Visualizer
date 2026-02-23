@@ -14,11 +14,27 @@ app.use(express.static(path.join(__dirname, 'public')));
 const LEAN_TIMEOUT_MS = 15000;
 const THEOREM_NAME = '_lean_vis_tmp';
 
+const MAX_CACHE = 20;
+const elaborateCache = new Map();
+const goalsCache = new Map();
+
+function getCacheKey(code) {
+  return crypto.createHash('sha256').update(code).digest('hex');
+}
+
+function cacheSet(cache, key, value) {
+  if (cache.size >= MAX_CACHE) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
 function rewriteCodeForExtraction(userCode) {
   let code = userCode;
 
-  const exampleRe = /\bexample\s*:/;
-  const theoremRe = /\btheorem\s+(\w+)\s*:/;
+  const exampleRe = /\bexample\s*(?=[\(\{\[:])/;
+  const theoremRe = /\btheorem\s+(\w+)/;
 
   let printName = THEOREM_NAME;
   const theoremMatch = code.match(theoremRe);
@@ -26,7 +42,7 @@ function rewriteCodeForExtraction(userCode) {
   if (theoremMatch) {
     printName = theoremMatch[1];
   } else if (exampleRe.test(code)) {
-    code = code.replace(exampleRe, `theorem ${THEOREM_NAME} :`);
+    code = code.replace(/\bexample\b/, `theorem ${THEOREM_NAME}`);
     printName = THEOREM_NAME;
   } else {
     return { code: null, printName: null, error: 'No theorem or example found in code.' };
@@ -82,7 +98,7 @@ function parsePrintOutput(output, printName) {
         line.startsWith('#') ||
         line.startsWith('def ') ||
         line.startsWith('warning:') ||
-        line.startsWith('/') && line.includes(': warning:')
+        /:\d+:\d+: (error|warning):/.test(line)
       ) {
         break;
       }
@@ -98,16 +114,19 @@ function parsePrintOutput(output, printName) {
   return { rawTerm, fullType };
 }
 
-function parseErrors(stdout, stderr) {
+function parseErrors(stdout, stderr, maxLine) {
   const errors = [];
   const combined = stdout + '\n' + stderr;
   const lines = combined.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.includes(': error:')) {
+      if (maxLine !== undefined) {
+        const lineMatch = line.match(/:(\d+):\d+:/);
+        if (lineMatch && parseInt(lineMatch[1]) > maxLine) continue;
+      }
       const msgStart = line.indexOf(': error:') + 8;
       let msg = line.substring(msgStart).trim();
-      // Collect continuation lines (indented or "Note:" lines)
       for (let j = i + 1; j < lines.length; j++) {
         const next = lines[j];
         if (next.startsWith('  ') || next.startsWith('Note:')) {
@@ -275,11 +294,11 @@ function stripForallPrefix(fullType, varNames) {
 function rewriteCodeForGoalState(userCode, cursorLine) {
   let code = userCode;
 
-  const exampleRe = /\bexample\s*:/;
-  const theoremRe = /\btheorem\s+(\w+)\s*:/;
+  const exampleRe = /\bexample\s*(?=[\(\{\[:])/;
+  const theoremRe = /\btheorem\s+(\w+)/;
 
   if (!theoremRe.test(code) && exampleRe.test(code)) {
-    code = code.replace(exampleRe, `theorem ${THEOREM_NAME} :`);
+    code = code.replace(/\bexample\b/, `theorem ${THEOREM_NAME}`);
   }
 
   let byLineIdx = -1;
@@ -359,6 +378,9 @@ function parseGoalState(stdout, stderr) {
   return goals;
 }
 
+let activeGoalsProc = null;
+let activeGoalsTmpFile = null;
+
 app.post('/api/goals', (req, res) => {
   const { code: userCode, cursorLine } = req.body;
 
@@ -369,24 +391,52 @@ app.post('/api/goals', (req, res) => {
     return res.status(400).json({ error: 'Missing "cursorLine" field.' });
   }
 
+  if (activeGoalsProc) {
+    activeGoalsProc.kill();
+    activeGoalsProc = null;
+    if (activeGoalsTmpFile) {
+      try { fs.unlinkSync(activeGoalsTmpFile); } catch (_) {}
+      activeGoalsTmpFile = null;
+    }
+  }
+
   const { code, error } = rewriteCodeForGoalState(userCode, cursorLine);
   if (error) {
     return res.json({ goals: [], error });
+  }
+
+  const goalsCacheKey = getCacheKey(code);
+  const cachedOutput = goalsCache.get(goalsCacheKey);
+  if (cachedOutput) {
+    const goals = parseGoalState(cachedOutput.stdout, cachedOutput.stderr);
+    return res.json({ goals });
   }
 
   const tmpDir = os.tmpdir();
   const tmpFile = path.join(tmpDir, `lean_goals_${crypto.randomBytes(6).toString('hex')}.lean`);
 
   fs.writeFileSync(tmpFile, code, 'utf-8');
+  activeGoalsTmpFile = tmpFile;
 
   const env = { ...process.env, ELAN_OFFLINE: '1' };
-  execFile('lean', [tmpFile], { timeout: LEAN_TIMEOUT_MS, env }, (err, stdout, stderr) => {
+  const proc = execFile('lean', [tmpFile], { timeout: LEAN_TIMEOUT_MS, env }, (err, stdout, stderr) => {
+    if (activeGoalsProc === proc) {
+      activeGoalsProc = null;
+      activeGoalsTmpFile = null;
+    }
     try { fs.unlinkSync(tmpFile); } catch (_) {}
 
+    if (err && err.killed) return;
+
+    cacheSet(goalsCache, goalsCacheKey, { stdout, stderr });
     const goals = parseGoalState(stdout, stderr);
     res.json({ goals });
   });
+  activeGoalsProc = proc;
 });
+
+let activeElaborateProc = null;
+let activeElaborateTmpFile = null;
 
 app.post('/api/elaborate', (req, res) => {
   const { code: userCode } = req.body;
@@ -395,21 +445,42 @@ app.post('/api/elaborate', (req, res) => {
     return res.status(400).json({ error: 'Missing "code" field.' });
   }
 
+  if (activeElaborateProc) {
+    activeElaborateProc.kill();
+    activeElaborateProc = null;
+    if (activeElaborateTmpFile) {
+      try { fs.unlinkSync(activeElaborateTmpFile); } catch (_) {}
+      activeElaborateTmpFile = null;
+    }
+  }
+
   const { code, printName, error } = rewriteCodeForExtraction(userCode);
   if (error) {
     return res.json({ term: null, displayTerm: null, errors: [error], complete: false });
+  }
+
+  const cacheKey = getCacheKey(userCode);
+  const cached = elaborateCache.get(cacheKey);
+  if (cached) {
+    return res.json(cached);
   }
 
   const tmpDir = os.tmpdir();
   const tmpFile = path.join(tmpDir, `lean_vis_${crypto.randomBytes(6).toString('hex')}.lean`);
 
   fs.writeFileSync(tmpFile, code, 'utf-8');
+  activeElaborateTmpFile = tmpFile;
 
   const env = { ...process.env, ELAN_OFFLINE: '1' };
-  execFile('lean', [tmpFile], { timeout: LEAN_TIMEOUT_MS, env }, (err, stdout, stderr) => {
+  const proc = execFile('lean', [tmpFile], { timeout: LEAN_TIMEOUT_MS, env }, (err, stdout, stderr) => {
+    if (activeElaborateProc === proc) {
+      activeElaborateProc = null;
+      activeElaborateTmpFile = null;
+    }
     try { fs.unlinkSync(tmpFile); } catch (_) {}
 
-    // #print goes to stdout in Lean 4; if not found there, check stderr too
+    if (err && err.killed) return;
+
     let parseSource = stdout;
     if (!parseSource.includes(`theorem ${printName}`)) {
       parseSource = stderr;
@@ -428,14 +499,173 @@ app.post('/api/elaborate', (req, res) => {
     const displayTerm = strippedTerm ? formatTermForDisplay(strippedTerm) : null;
     const complete = rawTerm ? !rawTerm.includes('sorry') : false;
 
-    res.json({
+    const result = {
       term: strippedTerm || null,
       displayTerm: displayTerm || null,
       type: strippedType || null,
       errors,
       complete,
-    });
+    };
+
+    cacheSet(elaborateCache, cacheKey, result);
+    res.json(result);
   });
+  activeElaborateProc = proc;
+});
+
+const GOALS_THEOREM_NAME = '_lean_vis_goals';
+
+function rewriteCodeForCombined(userCode, cursorLine) {
+  const elaborate = rewriteCodeForExtraction(userCode);
+  if (elaborate.error) {
+    return { code: null, printName: null, elaborateLineCount: 0, error: elaborate.error };
+  }
+
+  const elaborateLineCount = elaborate.code.split('\n').length;
+
+  let goalsCode = userCode;
+  const exampleRe = /\bexample\s*(?=[\(\{\[:])/;
+  const theoremRe = /\btheorem\s+(\w+)/;
+
+  if (!theoremRe.test(goalsCode) && exampleRe.test(goalsCode)) {
+    goalsCode = goalsCode.replace(/\bexample\b/, `theorem ${THEOREM_NAME}`);
+  }
+
+  const codeLines = goalsCode.split('\n');
+  let byLineIdx = -1;
+  for (let i = 0; i < codeLines.length; i++) {
+    if (codeLines[i].includes(':= by')) {
+      byLineIdx = i;
+      break;
+    }
+  }
+
+  if (byLineIdx === -1) {
+    return { code: elaborate.code, printName: elaborate.printName, elaborateLineCount, error: null };
+  }
+
+  let theoremLineIdx = -1;
+  for (let i = 0; i < codeLines.length; i++) {
+    if (/\btheorem\s+/.test(codeLines[i])) {
+      theoremLineIdx = i;
+      break;
+    }
+  }
+
+  if (theoremLineIdx === -1) {
+    return { code: elaborate.code, printName: elaborate.printName, elaborateLineCount, error: null };
+  }
+
+  const keepUntilLine = Math.max(byLineIdx, Math.min(cursorLine, codeLines.length - 1));
+  const goalsTheoremLines = codeLines.slice(theoremLineIdx, keepUntilLine + 1);
+  let goalsSection = goalsTheoremLines.join('\n');
+  goalsSection = goalsSection.replace(/\btheorem\s+\S+/, `theorem ${GOALS_THEOREM_NAME}`);
+
+  const combined = elaborate.code + '\n' + goalsSection + '\n';
+  return { code: combined, printName: elaborate.printName, elaborateLineCount, error: null };
+}
+
+const checkCache = new Map();
+let activeCheckProc = null;
+let activeCheckTmpFile = null;
+
+app.post('/api/check', (req, res) => {
+  const { code: userCode, cursorLine } = req.body;
+
+  if (!userCode || typeof userCode !== 'string') {
+    return res.status(400).json({ error: 'Missing "code" field.' });
+  }
+  if (typeof cursorLine !== 'number') {
+    return res.status(400).json({ error: 'Missing "cursorLine" field.' });
+  }
+
+  if (activeCheckProc) {
+    activeCheckProc.kill();
+    activeCheckProc = null;
+    if (activeCheckTmpFile) {
+      try { fs.unlinkSync(activeCheckTmpFile); } catch (_) {}
+      activeCheckTmpFile = null;
+    }
+  }
+
+  const checkCacheKey = getCacheKey(userCode + ':' + cursorLine);
+  const cachedCheck = checkCache.get(checkCacheKey);
+  if (cachedCheck) {
+    return res.json(cachedCheck);
+  }
+
+  const elaborateCacheKey = getCacheKey(userCode);
+  const cachedElaborate = elaborateCache.get(elaborateCacheKey);
+  const { code: goalsOnlyCode } = rewriteCodeForGoalState(userCode, cursorLine);
+  const goalsCacheKey = goalsOnlyCode ? getCacheKey(goalsOnlyCode) : null;
+  const cachedGoalsOutput = goalsCacheKey ? goalsCache.get(goalsCacheKey) : null;
+
+  if (cachedElaborate && cachedGoalsOutput) {
+    const goals = parseGoalState(cachedGoalsOutput.stdout, cachedGoalsOutput.stderr);
+    const result = { ...cachedElaborate, goals };
+    cacheSet(checkCache, checkCacheKey, result);
+    return res.json(result);
+  }
+
+  const { code, printName, elaborateLineCount, error } = rewriteCodeForCombined(userCode, cursorLine);
+  if (error) {
+    return res.json({ term: null, displayTerm: null, errors: [error], complete: false, goals: [] });
+  }
+
+  const tmpDir = os.tmpdir();
+  const tmpFile = path.join(tmpDir, `lean_check_${crypto.randomBytes(6).toString('hex')}.lean`);
+
+  fs.writeFileSync(tmpFile, code, 'utf-8');
+  activeCheckTmpFile = tmpFile;
+
+  const env = { ...process.env, ELAN_OFFLINE: '1' };
+  const proc = execFile('lean', [tmpFile], { timeout: LEAN_TIMEOUT_MS, env }, (err, stdout, stderr) => {
+    if (activeCheckProc === proc) {
+      activeCheckProc = null;
+      activeCheckTmpFile = null;
+    }
+    try { fs.unlinkSync(tmpFile); } catch (_) {}
+
+    if (err && err.killed) return;
+
+    let parseSource = stdout;
+    if (!parseSource.includes(`theorem ${printName}`)) {
+      parseSource = stderr;
+    }
+    if (!parseSource.includes(`theorem ${printName}`)) {
+      parseSource = stdout + '\n' + stderr;
+    }
+
+    const { rawTerm, fullType } = parsePrintOutput(parseSource, printName);
+    const errors = parseErrors(stdout, stderr, elaborateLineCount);
+
+    const varNames = parseVariableNames(userCode);
+    const strippedTerm = rawTerm ? stripVariableParams(rawTerm, varNames) : rawTerm;
+    const strippedType = fullType ? stripForallPrefix(fullType, varNames) : fullType;
+
+    const displayTerm = strippedTerm ? formatTermForDisplay(strippedTerm) : null;
+    const complete = rawTerm ? !rawTerm.includes('sorry') : false;
+
+    const elaborateResult = {
+      term: strippedTerm || null,
+      displayTerm: displayTerm || null,
+      type: strippedType || null,
+      errors,
+      complete,
+    };
+    cacheSet(elaborateCache, elaborateCacheKey, elaborateResult);
+
+    const goals = parseGoalState(stdout, stderr);
+
+    if (goalsOnlyCode) {
+      cacheSet(goalsCache, getCacheKey(goalsOnlyCode), { stdout, stderr });
+    }
+
+    const result = { ...elaborateResult, goals };
+    cacheSet(checkCache, checkCacheKey, result);
+    res.json(result);
+  });
+  activeCheckProc = proc;
 });
 
 app.listen(PORT, () => {
