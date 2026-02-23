@@ -184,12 +184,43 @@ const editor = CodeMirror(document.getElementById('editor-container'), {
     Tab: function (cm) {
       cm.replaceSelection('  ', 'end');
     },
+    'Cmd-Z': 'undo',
+    'Ctrl-Z': 'undo',
+    'Shift-Cmd-Z': 'redo',
+    'Shift-Ctrl-Z': 'redo',
+    'Cmd-Y': 'redo',
+    'Ctrl-Y': 'redo',
   },
 });
 
 // --- Unicode shortcut handling ---
 let shortcutBuffer = '';
 let shortcutStart = null;
+let shortcutHistoryLen = 0;
+
+function applyShortcutReplacement(cm, replacement, from, to) {
+  const savedLen = shortcutHistoryLen;
+  setTimeout(function () {
+    cm.operation(function () {
+      cm.replaceRange(replacement, from, to, '+input');
+    });
+    const hist = cm.getHistory();
+    const numNew = hist.done.length - savedLen;
+    if (numNew > 1) {
+      const merged = hist.done.splice(savedLen);
+      const allChanges = [];
+      for (const event of merged) {
+        if (event.changes) {
+          allChanges.push(...event.changes);
+        }
+      }
+      if (allChanges.length > 0) {
+        hist.done.push({ changes: allChanges });
+        cm.setHistory(hist);
+      }
+    }
+  }, 0);
+}
 
 editor.on('inputRead', function (cm, change) {
   if (change.origin !== '+input') return;
@@ -198,8 +229,7 @@ editor.on('inputRead', function (cm, change) {
   if (inserted === ' ' && shortcutBuffer) {
     const replacement = UNICODE_SHORTCUTS[shortcutBuffer];
     if (replacement) {
-      const cursor = cm.getCursor();
-      cm.replaceRange(replacement, shortcutStart, cursor);
+      applyShortcutReplacement(cm, replacement, shortcutStart, cm.getCursor());
       shortcutBuffer = '';
       shortcutStart = null;
       return;
@@ -212,6 +242,7 @@ editor.on('inputRead', function (cm, change) {
   if (inserted === '\\' && !shortcutBuffer) {
     shortcutBuffer = '\\';
     shortcutStart = { line: change.from.line, ch: change.from.ch };
+    shortcutHistoryLen = cm.getHistory().done.length;
     return;
   }
 
@@ -219,8 +250,7 @@ editor.on('inputRead', function (cm, change) {
     shortcutBuffer += inserted;
 
     if (UNICODE_SHORTCUTS[shortcutBuffer] && !HAS_LONGER_MATCH.has(shortcutBuffer)) {
-      const cursor = cm.getCursor();
-      cm.replaceRange(UNICODE_SHORTCUTS[shortcutBuffer], shortcutStart, cursor);
+      applyShortcutReplacement(cm, UNICODE_SHORTCUTS[shortcutBuffer], shortcutStart, cm.getCursor());
       shortcutBuffer = '';
       shortcutStart = null;
       return;
@@ -234,7 +264,7 @@ editor.on('inputRead', function (cm, change) {
       if (UNICODE_SHORTCUTS[withoutLast]) {
         const cursor = cm.getCursor();
         const endOfShortcut = { line: cursor.line, ch: cursor.ch - inserted.length };
-        cm.replaceRange(UNICODE_SHORTCUTS[withoutLast], shortcutStart, endOfShortcut);
+        applyShortcutReplacement(cm, UNICODE_SHORTCUTS[withoutLast], shortcutStart, endOfShortcut);
       }
       shortcutBuffer = '';
       shortcutStart = null;
