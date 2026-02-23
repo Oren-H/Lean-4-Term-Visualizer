@@ -16,11 +16,34 @@
     </div>
     <div class="header-right">
       <span class="tactics-label">Tactics:</span>
-      <code>intro</code> <code>intros</code> <code>apply</code> <code>exact</code>
-      <code>assumption</code> <code>constructor</code> <code>cases</code>
-      <code>left</code> <code>right</code> <code>have</code> <code>obtain</code>
+      <code class="tactic-btn" data-tactic="intro">intro</code>
+      <code class="tactic-btn" data-tactic="intros">intros</code>
+      <code class="tactic-btn" data-tactic="apply">apply</code>
+      <code class="tactic-btn" data-tactic="exact">exact</code>
+      <code class="tactic-btn" data-tactic="assumption">assumption</code>
+      <code class="tactic-btn" data-tactic="constructor">constructor</code>
+      <code class="tactic-btn" data-tactic="cases">cases</code>
+      <code class="tactic-btn" data-tactic="left">left</code>
+      <code class="tactic-btn" data-tactic="right">right</code>
+      <code class="tactic-btn" data-tactic="have">have</code>
+      <code class="tactic-btn" data-tactic="obtain">obtain</code>
     </div>
   </header>
+
+  <div id="tactic-modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <button class="modal-close" id="modal-close-btn">&times;</button>
+      <h2 class="modal-title" id="modal-title"></h2>
+      <div class="modal-section">
+        <h3>Tactic Mode</h3>
+        <p id="modal-tactic-desc"></p>
+      </div>
+      <div class="modal-section">
+        <h3>Term Mode</h3>
+        <p id="modal-term-desc"></p>
+      </div>
+    </div>
+  </div>
 
   <main>
     <div class="pane editor-pane">
@@ -33,17 +56,28 @@
 
     <div class="divider"></div>
 
-    <div class="pane term-pane">
-      <div class="pane-header">
-        <span class="pane-title">Term Mode</span>
-        <span id="status-indicator" class="status"></span>
-      </div>
-      <div id="term-display">
-        <div id="term-type" class="term-section"></div>
-        <div id="term-body" class="term-section">
-          <span class="placeholder">Write a theorem and tactics on the left to see the generated term.</span>
+    <div class="pane right-pane">
+      <div class="sub-pane term-sub-pane">
+        <div class="pane-header">
+          <span class="pane-title">Term Mode</span>
+          <span id="status-indicator" class="status"></span>
         </div>
-        <div id="term-errors" class="term-section"></div>
+        <div id="term-display">
+          <div id="term-type" class="term-section"></div>
+          <div id="term-body" class="term-section">
+            <span class="placeholder">Write a theorem and tactics on the left to see the generated term.</span>
+          </div>
+          <div id="term-errors" class="term-section"></div>
+        </div>
+      </div>
+      <div class="h-divider"></div>
+      <div class="sub-pane infoview-sub-pane">
+        <div class="pane-header">
+          <span class="pane-title">Lean InfoView</span>
+        </div>
+        <div id="infoview-display">
+          <span class="placeholder">Move cursor into a tactic block to see goals.</span>
+        </div>
       </div>
     </div>
   </main>

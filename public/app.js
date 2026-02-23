@@ -272,6 +272,93 @@ editor.on('inputRead', function (cm, change) {
   }
 });
 
+// --- Tactic info modal ---
+const TACTIC_INFO = {
+  intro: {
+    tactic: 'Introduces one hypothesis or variable from the goal into the local context. If the goal is <code>A → B</code>, then <code>intro h</code> moves <code>A</code> into the context as <code>h</code> and changes the goal to <code>B</code>.',
+    term: 'Corresponds to a lambda abstraction <code>fun h =&gt; ...</code>. The introduced hypothesis becomes a bound variable in the proof term.',
+  },
+  intros: {
+    tactic: 'Introduces multiple hypotheses or variables at once. <code>intros h1 h2</code> is equivalent to calling <code>intro</code> repeatedly. Without names, Lean auto-generates them.',
+    term: 'Corresponds to nested lambda abstractions <code>fun h1 h2 =&gt; ...</code>. Each introduced name adds another layer of binding.',
+  },
+  apply: {
+    tactic: 'Given a lemma or hypothesis <code>f : A → B</code> and a goal <code>B</code>, <code>apply f</code> reduces the goal to <code>A</code>. Works with any number of arguments.',
+    term: 'Corresponds to function application. The proof term becomes <code>f ?_</code> where each <code>?_</code> placeholder is a remaining subgoal to fill in.',
+  },
+  exact: {
+    tactic: 'Closes the current goal by providing a term whose type exactly matches the goal. <code>exact h</code> finishes the goal if <code>h</code> has the right type.',
+    term: 'Directly supplies the proof term. <code>exact h</code> simply inserts <code>h</code> as-is into the proof term at that position.',
+  },
+  assumption: {
+    tactic: 'Searches the local context for a hypothesis whose type exactly matches the current goal and uses it automatically.',
+    term: 'Resolves to whichever local variable (bound by <code>fun</code> or <code>have</code>) has a type matching the goal. Equivalent to <code>exact</code> with the matching hypothesis.',
+  },
+  constructor: {
+    tactic: 'When the goal is an inductive type, applies its default constructor. For <code>A ∧ B</code> it splits into two subgoals: prove <code>A</code> and prove <code>B</code>.',
+    term: 'Applies the type\'s constructor directly. For conjunctions this becomes <code>And.intro _ _</code>; for existentials, <code>Exists.intro _ _</code>.',
+  },
+  cases: {
+    tactic: 'Performs case analysis on a hypothesis. For <code>h : A ∨ B</code>, creates two subgoals — one assuming <code>A</code>, one assuming <code>B</code>. Works on any inductive type.',
+    term: 'Translates to a <code>.casesOn</code> eliminator or pattern match. For <code>h : A ∨ B</code>, becomes <code>Or.casesOn h (fun h1 =&gt; ...) (fun h2 =&gt; ...)</code>.',
+  },
+  left: {
+    tactic: 'When the goal is <code>A ∨ B</code>, selects the left disjunct and changes the goal to <code>A</code>.',
+    term: 'Corresponds to <code>Or.inl</code>, the left injection into a sum type. The proof term becomes <code>Or.inl _</code>.',
+  },
+  right: {
+    tactic: 'When the goal is <code>A ∨ B</code>, selects the right disjunct and changes the goal to <code>B</code>.',
+    term: 'Corresponds to <code>Or.inr</code>, the right injection into a sum type. The proof term becomes <code>Or.inr _</code>.',
+  },
+  have: {
+    tactic: 'Introduces an intermediate lemma. <code>have h : P := proof</code> adds <code>h : P</code> to the context, then you continue proving the original goal with <code>h</code> available.',
+    term: 'Corresponds to a <code>have</code> or <code>let</code> binding in the proof term: <code>have h : P := proof; body</code>. The intermediate result is bound and used in the rest of the term.',
+  },
+  obtain: {
+    tactic: 'Destructures an existential or structure hypothesis. <code>obtain ⟨x, hx⟩ := h</code> extracts the witness and proof from <code>h : ∃ x, P x</code>, adding both to the context.',
+    term: 'Corresponds to pattern matching on the existential: the term uses the eliminator or <code>let ⟨x, hx⟩ := h; ...</code> to bind the components.',
+  },
+};
+
+(function initTacticModal() {
+  const overlay = document.getElementById('tactic-modal-overlay');
+  const titleEl = document.getElementById('modal-title');
+  const tacticDescEl = document.getElementById('modal-tactic-desc');
+  const termDescEl = document.getElementById('modal-term-desc');
+  const closeBtn = document.getElementById('modal-close-btn');
+
+  function openModal(tactic) {
+    const info = TACTIC_INFO[tactic];
+    if (!info) return;
+    titleEl.textContent = tactic;
+    tacticDescEl.innerHTML = info.tactic;
+    termDescEl.innerHTML = info.term;
+    overlay.classList.remove('hidden');
+  }
+
+  function closeModal() {
+    overlay.classList.add('hidden');
+  }
+
+  document.querySelectorAll('.tactic-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openModal(btn.dataset.tactic);
+    });
+  });
+
+  closeBtn.addEventListener('click', closeModal);
+
+  overlay.addEventListener('click', function (e) {
+    if (e.target === overlay) closeModal();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !overlay.classList.contains('hidden')) {
+      closeModal();
+    }
+  });
+})();
+
 // --- API interaction ---
 const statusEl = document.getElementById('status-indicator');
 const termTypeEl = document.getElementById('term-type');
@@ -374,6 +461,82 @@ async function elaborate() {
 editor.on('change', function () {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(elaborate, 1500);
+  clearTimeout(goalsDebounceTimer);
+  goalsDebounceTimer = setTimeout(fetchGoals, 1500);
 });
 
 elaborate();
+
+// --- InfoView / Goal state ---
+const infoviewEl = document.getElementById('infoview-display');
+
+let goalsDebounceTimer = null;
+let goalsRequestId = 0;
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderGoals(goals) {
+  infoviewEl.innerHTML = '';
+
+  if (goals.length === 0) {
+    infoviewEl.innerHTML = '<span class="goals-complete">No goals</span>';
+    return;
+  }
+
+  for (const goal of goals) {
+    const block = document.createElement('div');
+    block.className = 'goal-block';
+
+    if (goal.caseName) {
+      const caseEl = document.createElement('div');
+      caseEl.className = 'goal-case';
+      caseEl.textContent = 'case ' + goal.caseName;
+      block.appendChild(caseEl);
+    }
+
+    if (goal.hypotheses.length > 0) {
+      const hypEl = document.createElement('div');
+      hypEl.className = 'goal-hypotheses';
+      hypEl.innerHTML = goal.hypotheses.map(h => escapeHtml(h)).join('\n');
+      block.appendChild(hypEl);
+    }
+
+    const targetEl = document.createElement('div');
+    targetEl.className = 'goal-target';
+    targetEl.innerHTML = '<span class="turnstile">⊢</span>' + escapeHtml(goal.target);
+    block.appendChild(targetEl);
+
+    infoviewEl.appendChild(block);
+  }
+}
+
+async function fetchGoals() {
+  const code = editor.getValue();
+  const cursorLine = editor.getCursor().line;
+  const currentRequest = ++goalsRequestId;
+
+  try {
+    const resp = await fetch('/api/goals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, cursorLine }),
+    });
+
+    if (currentRequest !== goalsRequestId) return;
+
+    const data = await resp.json();
+    renderGoals(data.goals || []);
+  } catch (err) {
+    if (currentRequest !== goalsRequestId) return;
+    infoviewEl.innerHTML = '<span class="placeholder">Failed to fetch goals.</span>';
+  }
+}
+
+editor.on('cursorActivity', function () {
+  clearTimeout(goalsDebounceTimer);
+  goalsDebounceTimer = setTimeout(fetchGoals, 500);
+});
+
+fetchGoals();

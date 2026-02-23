@@ -272,6 +272,122 @@ function stripForallPrefix(fullType, varNames) {
   return type;
 }
 
+function rewriteCodeForGoalState(userCode, cursorLine) {
+  let code = userCode;
+
+  const exampleRe = /\bexample\s*:/;
+  const theoremRe = /\btheorem\s+(\w+)\s*:/;
+
+  if (!theoremRe.test(code) && exampleRe.test(code)) {
+    code = code.replace(exampleRe, `theorem ${THEOREM_NAME} :`);
+  }
+
+  let byLineIdx = -1;
+  const codeLines = code.split('\n');
+  for (let i = 0; i < codeLines.length; i++) {
+    if (codeLines[i].includes(':= by')) {
+      byLineIdx = i;
+      break;
+    }
+  }
+
+  if (byLineIdx === -1) {
+    return { code: null, error: 'No ":= by" tactic block found.' };
+  }
+
+  const keepUntilLine = Math.max(byLineIdx, Math.min(cursorLine, codeLines.length - 1));
+  const keptLines = codeLines.slice(0, keepUntilLine + 1);
+  const truncated = keptLines.join('\n');
+
+  return { code: truncated, error: null };
+}
+
+function parseGoalState(stdout, stderr) {
+  const combined = stdout + '\n' + stderr;
+  const lines = combined.split('\n');
+  const goals = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    if (lines[i].includes('unsolved goals')) {
+      i++;
+      while (i < lines.length) {
+        while (i < lines.length && lines[i].trim() === '') i++;
+        if (i >= lines.length) break;
+
+        if (lines[i].match(/^\S.*:\d+:\d+:/) || lines[i].includes(': error:') || lines[i].includes(': warning:')) {
+          break;
+        }
+
+        let caseName = null;
+        const caseMatch = lines[i].match(/^case\s+(.+)/);
+        if (caseMatch) {
+          caseName = caseMatch[1].trim();
+          i++;
+        }
+
+        const hypotheses = [];
+        let target = '';
+
+        while (i < lines.length) {
+          const line = lines[i];
+          if (line.startsWith('⊢') || line.startsWith('|-')) {
+            target = line.replace(/^⊢\s*/, '').replace(/^\|-\s*/, '').trim();
+            i++;
+            while (i < lines.length && lines[i].startsWith('  ')) {
+              target += ' ' + lines[i].trim();
+              i++;
+            }
+            break;
+          }
+          if (line.trim() === '' || line.match(/^\S.*:\d+:\d+:/)) break;
+          hypotheses.push(line.trim());
+          i++;
+        }
+
+        if (target) {
+          goals.push({ caseName, hypotheses, target });
+        } else {
+          break;
+        }
+      }
+      break;
+    }
+    i++;
+  }
+
+  return goals;
+}
+
+app.post('/api/goals', (req, res) => {
+  const { code: userCode, cursorLine } = req.body;
+
+  if (!userCode || typeof userCode !== 'string') {
+    return res.status(400).json({ error: 'Missing "code" field.' });
+  }
+  if (typeof cursorLine !== 'number') {
+    return res.status(400).json({ error: 'Missing "cursorLine" field.' });
+  }
+
+  const { code, error } = rewriteCodeForGoalState(userCode, cursorLine);
+  if (error) {
+    return res.json({ goals: [], error });
+  }
+
+  const tmpDir = os.tmpdir();
+  const tmpFile = path.join(tmpDir, `lean_goals_${crypto.randomBytes(6).toString('hex')}.lean`);
+
+  fs.writeFileSync(tmpFile, code, 'utf-8');
+
+  const env = { ...process.env, ELAN_OFFLINE: '1' };
+  execFile('lean', [tmpFile], { timeout: LEAN_TIMEOUT_MS, env }, (err, stdout, stderr) => {
+    try { fs.unlinkSync(tmpFile); } catch (_) {}
+
+    const goals = parseGoalState(stdout, stderr);
+    res.json({ goals });
+  });
+});
+
 app.post('/api/elaborate', (req, res) => {
   const { code: userCode } = req.body;
 
