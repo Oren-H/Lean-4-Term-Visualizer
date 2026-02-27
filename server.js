@@ -752,6 +752,6 @@ app.post('/api/check', (req, res) => {
   activeCheckProc = proc;
 });
 
-app.listen(PORT, () => {
-  console.log(`Lean Term Visualizer running at http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Lean Term Visualizer running on port ${PORT}`);
 });
